@@ -34,6 +34,17 @@ class Pi0Config(_model.BaseModelConfig):
 
     pytorch_compile_mode: str | None = "max-autotune"
 
+    # AttenA+: velocity field action attention
+    # Assigns higher loss weights to low-velocity (precision-demanding) timesteps.
+    # Matches the interface of FastWAM and OpenVLA-OFT implementations.
+    use_velocity_attention: bool = False
+    velocity_weight_strategy: str = "inverse_squared"  # paper default; "inverse"|"inverse_squared"|"exp_decay"|"log"
+    velocity_clip_max_weight: float = 2.0
+    velocity_epsilon: float = 1e-3
+    velocity_alpha: float = 5.0          # paper value; only used by "exp_decay" strategy
+    velocity_normalize_weights: bool = True
+    velocity_joint_dims: int = 6         # number of leading action dims used for speed
+
     def __post_init__(self):
         if self.max_token_len is None:
             object.__setattr__(self, "max_token_len", 200 if self.pi05 else 48)

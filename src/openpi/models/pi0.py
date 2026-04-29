@@ -102,6 +102,15 @@ class Pi0(_model.BaseModel):
         # This attribute gets automatically set by model.train() and model.eval().
         self.deterministic = True
 
+        # AttenA+: velocity field action attention config
+        self.use_velocity_attention = config.use_velocity_attention
+        self.velocity_weight_strategy = config.velocity_weight_strategy
+        self.velocity_clip_max_weight = config.velocity_clip_max_weight
+        self.velocity_epsilon = config.velocity_epsilon
+        self.velocity_alpha = config.velocity_alpha
+        self.velocity_normalize_weights = config.velocity_normalize_weights
+        self.velocity_joint_dims = config.velocity_joint_dims
+
     @at.typecheck
     def embed_prefix(
         self, obs: _model.Observation
@@ -211,7 +220,57 @@ class Pi0(_model.BaseModel):
         )
         v_t = self.action_out_proj(suffix_out[:, -self.action_horizon :])
 
-        return jnp.mean(jnp.square(v_t - u_t), axis=-1)
+        # Per-timestep MSE loss: (B, T)
+        per_step_loss = jnp.mean(jnp.square(v_t - u_t), axis=-1)
+
+        if self.use_velocity_attention:
+            per_step_loss = per_step_loss * self._velocity_weights(actions)
+
+        return per_step_loss
+
+    def _velocity_weights(self, actions: _model.Actions) -> at.Float[at.Array, "*b ah"]:
+        """Compute AttenA+ velocity attention weights from ground-truth actions.
+
+        Mirrors the logic in FastWAM (action_loss.py) and OpenVLA-OFT
+        (train_utils.py), re-implemented in JAX.
+
+        Args:
+            actions: Ground-truth action chunk, shape (B, T, D).
+
+        Returns:
+            weights: Shape (B, T), ready to multiply per-step loss.
+        """
+        epsilon = self.velocity_epsilon
+        clip_max = self.velocity_clip_max_weight
+        alpha = self.velocity_alpha
+
+        # Speed from joint dims only (exclude gripper).
+        joint_actions = actions[..., : self.velocity_joint_dims]          # (B, T, J)
+        speed = jnp.linalg.norm(joint_actions, axis=-1, keepdims=True)    # (B, T, 1)
+        speed = jnp.clip(speed, a_min=epsilon)
+
+        # Map speed → weight (monotonically decreasing).
+        strategy = self.velocity_weight_strategy
+        if strategy == "inverse":
+            weights = 1.0 / speed
+        elif strategy == "inverse_squared":
+            weights = 1.0 / (speed ** 2)
+        elif strategy == "exp_decay":
+            weights = jnp.exp(-alpha * speed)
+        elif strategy == "log":
+            weights = 1.0 / jnp.log1p(speed)
+        else:
+            raise ValueError(f"Unknown velocity_weight_strategy: {strategy!r}")
+
+        # Clip to [1/clip_max, clip_max].
+        weights = jnp.clip(weights, a_max=clip_max)
+        weights = jnp.clip(weights, a_min=1.0 / clip_max)
+
+        # Optional normalization: keep average weight ≈ 1.
+        if self.velocity_normalize_weights:
+            weights = weights / clip_max * 2.0
+
+        return weights[..., 0]  # (B, T)
 
     @override
     def sample_actions(

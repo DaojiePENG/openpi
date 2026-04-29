@@ -761,6 +761,41 @@ _CONFIGS = [
         pytorch_weight_path="/path/to/your/pytorch_weight_path",
         num_train_steps=30_000,
     ),
+    # AttenA+: π₀.₅ + velocity field action attention on LIBERO.
+    # Identical to pi05_libero but with use_velocity_attention=True.
+    TrainConfig(
+        name="attena_pi05_libero",
+        model=pi0_config.Pi0Config(
+            pi05=True,
+            action_horizon=10,
+            discrete_state_input=False,
+            # AttenA+ velocity attention
+            use_velocity_attention=True,
+            velocity_weight_strategy="inverse_squared",  # paper default
+            velocity_clip_max_weight=2.0,
+            velocity_epsilon=1e-3,
+            velocity_alpha=5.0,
+            velocity_normalize_weights=True,
+            velocity_joint_dims=6,
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/libero",
+            base_config=DataConfig(prompt_from_task=True),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
+        pytorch_weight_path="/path/to/your/pytorch_weight_path",
+        num_train_steps=30_000,
+    ),
     #
     # Fine-tuning Aloha configs.
     #
